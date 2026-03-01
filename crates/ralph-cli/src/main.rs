@@ -10,6 +10,7 @@
 //! - Project initialization via `ralph init`
 //! - SOP-based planning via `ralph plan`
 //! - Code task generation via `ralph code-task`
+//! - Hook config validation via `ralph hooks validate`
 //! - Work item tracking via `ralph task`
 
 mod backend_support;
@@ -17,6 +18,7 @@ mod bot;
 mod display;
 mod doctor;
 mod hats;
+mod hooks;
 mod init;
 mod interact;
 mod loop_runner;
@@ -471,6 +473,9 @@ enum Commands {
 
     /// Run preflight checks to validate configuration and environment
     Preflight(preflight::PreflightArgs),
+
+    /// Validate hooks configuration and command wiring
+    Hooks(hooks::HooksArgs),
 
     /// Run first-run diagnostics and environment checks
     Doctor(doctor::DoctorArgs),
@@ -1004,6 +1009,15 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Preflight(args)) => {
             preflight::execute(
+                &config_sources,
+                hats_source.as_ref(),
+                args,
+                cli.color.should_use_colors(),
+            )
+            .await
+        }
+        Some(Commands::Hooks(args)) => {
+            hooks::execute(
                 &config_sources,
                 hats_source.as_ref(),
                 args,
@@ -2608,6 +2622,7 @@ fn list_directory_contents(path: &Path, use_colors: bool, indent: usize) -> Resu
 mod tests {
     use super::*;
     use crate::test_support::CwdGuard;
+    use ralph_core::{HookMutationConfig, HookOnError, HookPhaseEvent, HookSpec};
     use std::path::PathBuf;
 
     #[test]
@@ -2943,6 +2958,58 @@ mod tests {
         let report = report.expect("expected preflight report in dry-run mode");
         assert!(!report.passed);
         assert!(report.failures >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_auto_preflight_skip_list_can_omit_hooks_check_failures() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp_dir.path().to_path_buf();
+        config.features.preflight.enabled = true;
+        config.cli.backend = "custom".to_string();
+
+        let backend_cmd = temp_dir.path().join("backend-ok");
+        std::fs::write(&backend_cmd, "ok").unwrap();
+        config.cli.command = Some(backend_cmd.to_string_lossy().to_string());
+
+        config.hooks.enabled = true;
+        config.hooks.events.insert(
+            HookPhaseEvent::PreLoopStart,
+            vec![HookSpec {
+                name: "broken-hook".to_string(),
+                command: vec!["./scripts/hooks/missing.sh".to_string()],
+                cwd: None,
+                env: std::collections::HashMap::new(),
+                timeout_seconds: None,
+                max_output_bytes: None,
+                on_error: Some(HookOnError::Block),
+                suspend_mode: None,
+                mutate: HookMutationConfig::default(),
+                extra: std::collections::HashMap::new(),
+            }],
+        );
+
+        let unskipped = run_auto_preflight(&config, false, false, AutoPreflightMode::DryRun)
+            .await
+            .unwrap()
+            .expect("dry-run preflight report");
+
+        assert!(!unskipped.passed);
+        let hooks_check = unskipped
+            .checks
+            .iter()
+            .find(|check| check.name == "hooks")
+            .expect("hooks check should be present without skip");
+        assert_eq!(hooks_check.status, CheckStatus::Fail);
+
+        config.features.preflight.skip = vec!["hooks".to_string()];
+        let skipped = run_auto_preflight(&config, false, false, AutoPreflightMode::DryRun)
+            .await
+            .unwrap()
+            .expect("dry-run preflight report");
+
+        assert!(skipped.passed);
+        assert!(skipped.checks.iter().all(|check| check.name != "hooks"));
     }
 
     #[tokio::test]

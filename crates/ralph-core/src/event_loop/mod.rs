@@ -19,6 +19,7 @@ use crate::memory_store::{MarkdownMemoryStore, format_memories_as_markdown, trun
 use crate::skill_registry::SkillRegistry;
 use crate::text::floor_char_boundary;
 use ralph_proto::{CheckinContext, Event, EventBus, Hat, HatId, RobotService};
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -30,6 +31,11 @@ use tracing::{debug, info, warn};
 pub struct ProcessedEvents {
     /// Whether any valid events were found and published.
     pub had_events: bool,
+    /// Whether any published events matched the semantic `plan.*` topic family.
+    pub had_plan_events: bool,
+    /// Structured context for the first processed `human.interact` event,
+    /// including the question payload and post-dispatch outcome metadata.
+    pub human_interact_context: Option<Value>,
     /// Whether any events lacked specific hat subscribers (orphans handled by Ralph).
     pub has_orphans: bool,
 }
@@ -410,6 +416,11 @@ impl EventLoop {
         &self.registry
     }
 
+    /// Records hook telemetry for diagnostics.
+    pub fn log_hook_run_telemetry(&self, entry: crate::diagnostics::HookRunTelemetryEntry) {
+        self.diagnostics.log_hook_run(entry);
+    }
+
     /// Gets the backend configuration for a hat.
     ///
     /// If the hat has a backend configured, returns that.
@@ -692,6 +703,31 @@ impl EventLoop {
     /// want to artificially delay the response to a human interaction.
     pub fn has_pending_human_events(&self) -> bool {
         self.bus.has_human_pending()
+    }
+
+    /// Returns whether unread JSONL events include any semantic `plan.*` topics.
+    ///
+    /// This allows callers to dispatch `pre.plan.created` hooks before
+    /// event publication handling without consuming unread events.
+    pub fn has_pending_plan_events_in_jsonl(&self) -> std::io::Result<bool> {
+        let result = self.event_reader.peek_new_events()?;
+        Ok(result
+            .events
+            .iter()
+            .any(|event| event.topic.starts_with("plan.")))
+    }
+
+    /// Returns structured context for the first unread `human.interact` event,
+    /// if one is present in JSONL without consuming reader state.
+    pub fn pending_human_interact_context_in_jsonl(&self) -> std::io::Result<Option<Value>> {
+        let result = self.event_reader.peek_new_events()?;
+        Ok(result
+            .events
+            .iter()
+            .find(|event| event.topic == "human.interact")
+            .map(|event| {
+                Self::parse_human_interact_context(event.payload.as_deref().unwrap_or_default())
+            }))
     }
 
     /// Gets the topics a hat is allowed to publish.
@@ -1780,6 +1816,28 @@ impl EventLoop {
         }
     }
 
+    fn parse_human_interact_context(payload: &str) -> Value {
+        let mut context = match serde_json::from_str::<Value>(payload) {
+            Ok(Value::Object(map)) => map,
+            Ok(value) => {
+                let mut map = Map::new();
+                map.insert("question".to_string(), value);
+                map
+            }
+            Err(_) => {
+                let mut map = Map::new();
+                map.insert("question".to_string(), Value::String(payload.to_string()));
+                map
+            }
+        };
+
+        if !context.contains_key("question") {
+            context.insert("question".to_string(), Value::String(payload.to_string()));
+        }
+
+        Value::Object(context)
+    }
+
     /// Processes events from JSONL and routes orphaned events to Ralph.
     ///
     /// Also handles backpressure for malformed JSONL lines by:
@@ -1787,8 +1845,10 @@ impl EventLoop {
     /// 2. Tracking consecutive failures for termination check
     /// 3. Resetting counter when valid events are parsed
     ///
-    /// Returns [`ProcessedEvents`] indicating whether events were found and whether
-    /// any were orphans that Ralph should handle.
+    /// Returns [`ProcessedEvents`] indicating whether events were found, whether
+    /// semantic `plan.*` topics were published, structured `human.interact`
+    /// context/outcome metadata, and whether any were orphans that Ralph should
+    /// handle.
     pub fn process_events_from_jsonl(&mut self) -> std::io::Result<ProcessedEvents> {
         let result = self.event_reader.read_new_events()?;
 
@@ -1816,6 +1876,8 @@ impl EventLoop {
         if result.events.is_empty() && result.malformed.is_empty() {
             return Ok(ProcessedEvents {
                 had_events: false,
+                had_plan_events: false,
+                human_interact_context: None,
                 has_orphans: false,
             });
         }
@@ -2152,6 +2214,7 @@ impl EventLoop {
         // When a human.interact event is detected and robot service is active,
         // send the question and block until human.response or timeout.
         let mut response_event = None;
+        let mut human_interact_context = None;
         let ask_human_idx = validated_events
             .iter()
             .position(|e| e.topic == "human.interact".into());
@@ -2159,6 +2222,11 @@ impl EventLoop {
         if let Some(idx) = ask_human_idx {
             let ask_event = &validated_events[idx];
             let payload = ask_event.payload.clone();
+
+            let mut context = match Self::parse_human_interact_context(&payload) {
+                Value::Object(map) => map,
+                _ => Map::new(),
+            };
 
             if let Some(ref robot_service) = self.robot_service {
                 info!(
@@ -2184,6 +2252,11 @@ impl EventLoop {
                                 retry_count: 3,
                             },
                         );
+                        context.insert(
+                            "outcome".to_string(),
+                            Value::String("send_failure".to_string()),
+                        );
+                        context.insert("error".to_string(), Value::String(e.to_string()));
                         false
                     }
                 };
@@ -2219,6 +2292,11 @@ impl EventLoop {
                                 response = %response,
                                 "Received human.response — continuing loop"
                             );
+                            context.insert(
+                                "outcome".to_string(),
+                                Value::String("response".to_string()),
+                            );
+                            context.insert("response".to_string(), Value::String(response.clone()));
                             // Create a human.response event to inject into the bus
                             response_event = Some(Event::new("human.response", &response));
                         }
@@ -2226,6 +2304,14 @@ impl EventLoop {
                             warn!(
                                 timeout_secs = robot_service.timeout_secs(),
                                 "Human response timeout — injecting human.timeout event"
+                            );
+                            context.insert(
+                                "outcome".to_string(),
+                                Value::String("timeout".to_string()),
+                            );
+                            context.insert(
+                                "timeout_seconds".to_string(),
+                                Value::from(robot_service.timeout_secs()),
                             );
                             let timeout_event = Event::new(
                                 "human.timeout",
@@ -2242,6 +2328,11 @@ impl EventLoop {
                                 error = %e,
                                 "Error waiting for human response — injecting human.timeout event"
                             );
+                            context.insert(
+                                "outcome".to_string(),
+                                Value::String("wait_error".to_string()),
+                            );
+                            context.insert("error".to_string(), Value::String(e.to_string()));
                             let timeout_event = Event::new(
                                 "human.timeout",
                                 format!(
@@ -2257,11 +2348,20 @@ impl EventLoop {
                 debug!(
                     "human.interact event detected but no robot service active — passing through"
                 );
+                context.insert(
+                    "outcome".to_string(),
+                    Value::String("no_robot_service".to_string()),
+                );
             }
+
+            human_interact_context = Some(Value::Object(context));
         }
 
         // Track whether any events will be published (before the loop consumes them).
         let had_events = !validated_events.is_empty();
+        let had_plan_events = validated_events
+            .iter()
+            .any(|event| event.topic.as_str().starts_with("plan."));
 
         // Publish validated events to the bus.
         // Ralph is always registered with subscribe("*"), so every event has at least
@@ -2302,6 +2402,8 @@ impl EventLoop {
 
         Ok(ProcessedEvents {
             had_events,
+            had_plan_events,
+            human_interact_context,
             has_orphans,
         })
     }
