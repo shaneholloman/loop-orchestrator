@@ -323,13 +323,19 @@ mod tests {
         assert!(
             investigator
                 .instructions
-                .contains("On `hypothesis.confirmed`:")
+                .contains("If the bug is already fixed, cannot be reproduced")
         );
         assert!(
             investigator
                 .instructions
-                .contains("Emit exactly one `fix.propose`")
+                .contains("Do not end the turn with only prose")
         );
+        assert!(
+            investigator
+                .instructions
+                .contains("On `hypothesis.confirmed`:")
+        );
+        assert!(investigator.instructions.contains("emit `fix.propose`"));
         assert!(investigator.instructions.contains("On `fix.verified`:"));
         assert!(
             investigator
@@ -346,6 +352,11 @@ mod tests {
                 .instructions
                 .contains("❌ Skip the event chain by doing fix or verification work inline")
         );
+        assert!(
+            investigator
+                .instructions
+                .contains("❌ End the turn with only narration")
+        );
 
         let tester = config.hats.get("tester").expect("tester hat should exist");
         assert_eq!(tester.triggers, vec!["hypothesis.test".to_string()]);
@@ -360,6 +371,11 @@ mod tests {
             tester
                 .instructions
                 .contains("nearby adversarial or neighboring failure-path case")
+        );
+        assert!(
+            tester
+                .instructions
+                .contains("If the hypothesis says the bug is already fixed")
         );
 
         let fixer = config.hats.get("fixer").expect("fixer hat should exist");

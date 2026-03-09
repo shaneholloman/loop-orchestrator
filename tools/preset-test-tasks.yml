@@ -86,6 +86,24 @@ test_tasks:
     Plan a migration from Ralph v1 flat config format to v2 nested format.
     Use the expand-contract pattern. Document the plan in `.eval-sandbox/migration/plan.md`.
 
+  debug: |
+    Debug a real intermittent Rust race in `.eval-sandbox/debug-counter/`.
+
+    1. Create a tiny Rust crate there if it does not already exist.
+    2. Reproduce and debug this intentionally broken implementation:
+       ```rust
+       use std::sync::atomic::{AtomicUsize, Ordering};
+
+       pub fn racy_increment(counter: &AtomicUsize) {
+           let current = counter.load(Ordering::Relaxed);
+           std::thread::yield_now();
+           counter.store(current + 1, Ordering::Relaxed);
+       }
+       ```
+    3. Add a stress test that makes the lost-update bug observable.
+    4. Document the investigation in `.eval-sandbox/debug/counter.md`.
+    5. Fix only the root cause, add a regression test, and verify with repeated stress runs plus one nearby adversarial case.
+
 # Complexity ratings for time budgeting
 # NOTE: Ratings based on actual iteration counts and per-iteration times observed
 # Multi-hat presets with exploration tend to run longer (~75-90s/iteration)
@@ -103,6 +121,7 @@ complexity:
   documentation-first: medium
   incident-response: medium
   migration-safety: complex
+  debug: medium
 
 # Expected iteration ranges
 expected_iterations:
@@ -119,6 +138,7 @@ expected_iterations:
   documentation-first: [4, 6]
   incident-response: [4, 5]
   migration-safety: [4, 5]
+  debug: [4, 8]
 
 # Timeout per preset (seconds)
 # Based on observed per-iteration times:

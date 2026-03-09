@@ -884,14 +884,17 @@ impl EventLoop {
                 self.update_robot_guidance(guidance_events);
                 self.apply_robot_guidance();
 
-                // Determine which hats are active based on regular events
+                // Ignore kickoff/recovery noise when a real downstream event is pending.
+                let effective_regular_events = self.effective_regular_events(&regular_events);
+
+                // Determine which hats are active based on the effective event set
                 let active_hat_ids = self.determine_active_hat_ids(&regular_events);
                 self.record_hat_activations(&active_hat_ids);
                 self.state.last_active_hat_ids = active_hat_ids.clone();
                 let active_hats = self.determine_active_hats(&regular_events);
 
                 // Format events for context
-                let events_context = regular_events
+                let events_context = effective_regular_events
                     .iter()
                     .map(|e| Self::format_event(e))
                     .collect::<Vec<_>>()

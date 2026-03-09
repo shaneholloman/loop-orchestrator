@@ -1657,7 +1657,8 @@ hats:
 
 #[test]
 fn test_always_hatless_collects_all_pending_events() {
-    // Verify Ralph's prompt includes events from ALL hats when in multi-hat mode
+    // Verify Ralph's prompt includes downstream events from all hats when in multi-hat mode.
+    // Kickoff events like task.start should drop out once a more specific downstream event exists.
     let yaml = r#"
 hats:
   planner:
@@ -1681,10 +1682,11 @@ hats:
     // Ralph should collect ALL pending events
     let prompt = event_loop.build_prompt(&HatId::new("ralph")).unwrap();
 
-    // Both events should be in Ralph's context
+    // The downstream event should be in Ralph's context, and the kickoff event
+    // should not dominate once downstream work is pending.
     assert!(
-        prompt.contains("task.start"),
-        "Should include task.start event"
+        !prompt.contains("task.start"),
+        "task.start should be filtered once a downstream event is pending"
     );
     assert!(
         prompt.contains("build.task"),

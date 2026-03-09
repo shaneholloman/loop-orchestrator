@@ -8605,6 +8605,72 @@ hats:
     }
 
     #[test]
+    fn test_resolve_display_hat_for_execution_ignores_targeted_task_resume_noise() {
+        let yaml = r#"
+hats:
+  investigator:
+    name: "Investigator"
+    triggers: ["task.resume", "debug.start", "hypothesis.confirmed"]
+  tester:
+    name: "Tester"
+    triggers: ["hypothesis.test"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).expect("yaml config");
+        let mut event_loop = EventLoop::new(config);
+
+        event_loop
+            .bus()
+            .publish(Event::new("task.resume", "Recovery").with_target("investigator"));
+        event_loop
+            .bus()
+            .publish(Event::new("hypothesis.test", "Test the hypothesis"));
+        event_loop
+            .build_prompt(&HatId::new("ralph"))
+            .expect("prompt should build");
+
+        let display_hat = resolve_display_hat_for_execution(
+            &event_loop,
+            &HatId::new("ralph"),
+            &HatId::new("investigator"),
+        );
+
+        assert_eq!(display_hat.as_str(), "tester");
+    }
+
+    #[test]
+    fn test_resolve_display_hat_for_execution_prefers_downstream_event_over_start_event() {
+        let yaml = r#"
+hats:
+  investigator:
+    name: "Investigator"
+    triggers: ["debug.start", "hypothesis.confirmed"]
+  tester:
+    name: "Tester"
+    triggers: ["hypothesis.test"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).expect("yaml config");
+        let mut event_loop = EventLoop::new(config);
+
+        event_loop
+            .bus()
+            .publish(Event::new("debug.start", "Investigate the bug"));
+        event_loop
+            .bus()
+            .publish(Event::new("hypothesis.test", "Test the hypothesis"));
+        event_loop
+            .build_prompt(&HatId::new("ralph"))
+            .expect("prompt should build");
+
+        let display_hat = resolve_display_hat_for_execution(
+            &event_loop,
+            &HatId::new("ralph"),
+            &HatId::new("investigator"),
+        );
+
+        assert_eq!(display_hat.as_str(), "tester");
+    }
+
+    #[test]
     fn test_resolve_display_hat_for_execution_keeps_explicit_non_ralph_hat() {
         let event_loop = EventLoop::new(RalphConfig::default());
 

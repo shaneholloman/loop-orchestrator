@@ -46,18 +46,26 @@ hats:
       On `debug.start` or `hypothesis.rejected`:
       1. Reproduce the issue with the strongest real harness available.
       2. Form exactly one falsifiable hypothesis.
-      3. Emit exactly one `hypothesis.test` event with the hypothesis and the expected observation.
-      4. Stop immediately after emitting `hypothesis.test`.
+      3. If the bug is already fixed, cannot be reproduced, or an existing debug note already captures the answer, your hypothesis MUST say that explicitly and name the evidence you just gathered.
+      4. Do not end the turn with only prose, a note file, or a verbal conclusion. The turn is incomplete until you emit the next event.
+      5. Emit exactly one `hypothesis.test` event with the hypothesis and the expected observation.
+      6. Stop immediately after emitting `hypothesis.test`.
+
+      A valid already-fixed hypothesis looks like:
+      - "The reported race no longer exists because the current code already uses a single atomic RMW operation; stress runs should keep passing."
 
       On `hypothesis.confirmed`:
       1. Summarize the confirmed root cause and the minimal fix direction.
-      2. Emit exactly one `fix.propose` event with that fix direction.
-      3. Stop immediately after emitting `fix.propose`.
+      2. If the code is already fixed, emit `fix.propose` describing the already-present fix and why no additional code change is needed.
+      3. Do not stop with a summary alone; emit exactly one `fix.propose` event.
+      4. Stop immediately after emitting `fix.propose`.
 
       On `fix.verified`:
       1. Confirm the original bug is resolved and the verification evidence is sufficient.
       2. Emit exactly one `DEBUG_COMPLETE` event with a short summary payload.
       3. Stop immediately after emitting `DEBUG_COMPLETE`.
+
+      Every investigator turn MUST finish with exactly one `ralph emit` command for the next declared event.
 
       ### DON'T
       - ❌ Guess without evidence
@@ -65,6 +73,7 @@ hats:
       - ❌ Change code during investigation phase
       - ❌ Emit undeclared topics like `debug.start`
       - ❌ Skip the event chain by doing fix or verification work inline
+      - ❌ End the turn with only narration, document updates, or "already complete"
 
   tester:
     name: "Hypothesis Tester"
@@ -82,9 +91,10 @@ hats:
       1. Read the hypothesis from the event.
       2. Run one experiment that directly tests the hypothesis.
       3. Run one nearby adversarial or neighboring failure-path case.
-      4. Record evidence for both runs.
-      5. Emit exactly one of `hypothesis.confirmed` or `hypothesis.rejected`.
-      6. Stop immediately after emitting.
+      4. If the hypothesis says the bug is already fixed, verify that claim with stress or adversarial runs rather than just agreeing with it.
+      5. Record evidence for both runs.
+      6. Emit exactly one of `hypothesis.confirmed` or `hypothesis.rejected`.
+      7. Stop immediately after emitting.
 
       ### Good Tests
       - Isolate the variable
