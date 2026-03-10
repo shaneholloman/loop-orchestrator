@@ -603,15 +603,23 @@ impl EventLoop {
             return None;
         }
 
-        // Log warning if tasks remain open (informational only)
+        // Runtime tasks are the canonical queue when memories/tasks mode is enabled.
         if self.config.memories.enabled {
             if let Ok(false) = self.verify_tasks_complete() {
                 let open_tasks = self.get_open_task_list();
                 warn!(
                     open_tasks = ?open_tasks,
-                    "Completion event with {} open task(s) - trusting agent decision",
+                    "Rejecting completion event with {} open task(s)",
                     open_tasks.len()
                 );
+                self.bus.publish(Event::new(
+                    "task.resume",
+                    format!(
+                        "Completion rejected: runtime tasks remain open: {:?}. Close, fail, or reopen outstanding tasks before emitting the completion promise.",
+                        open_tasks
+                    ),
+                ));
+                return None;
             }
         } else if let Ok(false) = self.verify_scratchpad_complete() {
             warn!("Completion event with pending scratchpad tasks - trusting agent decision");
@@ -1328,8 +1336,15 @@ impl EventLoop {
                     _ => "[?]",
                 };
                 section.push_str(&format!(
-                    "- {} [P{}] {} ({})\n",
-                    status_icon, task.priority, task.title, task.id
+                    "- {} [P{}] {} ({}){}\n",
+                    status_icon,
+                    task.priority,
+                    task.title,
+                    task.id,
+                    task.key
+                        .as_deref()
+                        .map(|key| format!(" — key: {key}"))
+                        .unwrap_or_default()
                 ));
             }
             // Show blocked tasks separately so agent knows they exist
@@ -1342,10 +1357,14 @@ impl EventLoop {
                 section.push_str("\nBlocked:\n");
                 for task in blocked {
                     section.push_str(&format!(
-                        "- [blocked] [P{}] {} ({}) — blocked by: {}\n",
+                        "- [blocked] [P{}] {} ({}){} — blocked by: {}\n",
                         task.priority,
                         task.title,
                         task.id,
+                        task.key
+                            .as_deref()
+                            .map(|key| format!(" — key: {key}"))
+                            .unwrap_or_default(),
                         task.blocked_by.join(", ")
                     ));
                 }

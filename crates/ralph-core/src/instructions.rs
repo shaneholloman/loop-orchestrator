@@ -173,6 +173,26 @@ impl InstructionBuilder {
 You MUST study the incoming event context.
 You MUST NOT assume work isn't done — verify first.
 
+### 0b. TOOL DISCIPLINE
+Runtime work state lives in `ralph tools task`, not in ad hoc markdown checklists.
+You MUST check `<ready-tasks>` before creating more tasks.
+If this iteration creates or discovers durable work, you MUST represent it with `ralph tools task ensure`, `start`, `close`, `reopen`, or `fail` as appropriate.
+If you are entering an unfamiliar area, you SHOULD search memories with `ralph tools memory search` before acting.
+You MUST NOT spend iterations debugging PATH, shell startup files, or whether `ralph` exists. If the loop is running, assume `ralph emit` and `ralph tools` are available and use them directly.
+The loop sets `$RALPH_BIN` to the current Ralph executable. Prefer `$RALPH_BIN emit ...` and `$RALPH_BIN tools ...` when you need a direct command form.
+You MUST NEVER run `which ralph`, `type ralph`, `ralph --version`, or similar availability probes inside the loop.
+You MUST NEVER burn turns on environment-probe commands such as `echo`, `pwd`, `ls`, `id`, `stat`, `command -v`, `which`, `type`, or tool `--version` checks unless the task is specifically about diagnosing the shell/runtime.
+You MUST NOT infer command failure from empty or terse stdout alone. Confirm side effects instead:
+- `ralph tools task ...` -> inspect `.ralph/agent/tasks.jsonl`
+- `ralph emit ...` -> inspect `.ralph/current-events` or `.ralph/events-*.jsonl`
+- build/test/file commands -> inspect the files they changed or wrote
+You MUST prefer task-specific commands and side-effect checks over `which`, `type`, `--version`, `echo`, `pwd`, `ls`, or PATH probes.
+You MUST NOT redirect scratch output or temporary logs into `/tmp`. Use `/var/tmp` or a project-local `logs/` directory instead.
+If a command fails, a dependency is missing, or you become blocked, you MUST record a `fix` memory with `ralph tools memory add`.
+If the issue is not resolved in the same iteration, you MUST fail or reopen the relevant runtime task before stopping.
+If your confidence is 80 or below on a consequential decision, you MUST document it in `.ralph/agent/decisions.md`.
+If this turn is likely to run longer than a few minutes, you SHOULD send a non-blocking progress update with `ralph tools interact progress`.
+
 ### 1. EXECUTE
 {role_instructions}
 You MUST NOT use more than 1 subagent for build/tests.
@@ -229,6 +249,17 @@ mod tests {
         assert!(instructions.contains("### 0. ORIENTATION"));
         assert!(instructions.contains("You MUST study the incoming event context"));
         assert!(instructions.contains("You MUST NOT assume work isn't done"));
+
+        assert!(instructions.contains("### 0b. TOOL DISCIPLINE"));
+        assert!(instructions.contains("You MUST check `<ready-tasks>` before creating more tasks"));
+        assert!(
+            instructions
+                .contains("`ralph tools task ensure`, `start`, `close`, `reopen`, or `fail`")
+        );
+        assert!(instructions.contains("`ralph tools memory search`"));
+        assert!(instructions.contains("`ralph tools memory add`"));
+        assert!(instructions.contains(".ralph/agent/decisions.md"));
+        assert!(instructions.contains("ralph tools interact progress"));
 
         // Numbered execute phase with RFC2119
         assert!(instructions.contains("### 1. EXECUTE"));

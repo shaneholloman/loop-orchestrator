@@ -11,6 +11,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 output_log="$tmp_dir/output.log"
 session_file="$tmp_dir/session.jsonl"
 fake_ralph="$tmp_dir/fake-ralph"
+fake_ralph_on_path="$tmp_dir/ralph"
 
 cat > "$output_log" <<'EOF'
 ===============================================================================
@@ -32,6 +33,7 @@ else
 fi
 EOF
 chmod +x "$fake_ralph"
+ln -s "$fake_ralph" "$fake_ralph_on_path"
 
 EVALUATE_PRESET_LIB_ONLY=1 source "$SCRIPT_DIR/evaluate-preset.sh"
 
@@ -55,6 +57,8 @@ RALPH_EVAL_BINARY="$fake_ralph"
 resolve_ralph_command
 resolved_version="$(run_ralph --version)"
 resolved_run="$(run_ralph run --dry-run)"
+resolved_timed_run="$(run_ralph_with_timeout 5 run --dry-run)"
+resolved_path_ralph="$(command -v ralph)"
 
 assert_eq "$iterations" "2" "ASCII iteration markers should be counted"
 assert_eq "$hats" "planner,reviewer" "ASCII iteration markers should yield hat ids"
@@ -62,5 +66,7 @@ assert_eq "$recording_empty" "true" "zero-byte session file should be reported a
 assert_eq "$termination" "process_exit" "zero-byte session with zero exit should report process_exit termination"
 assert_eq "$resolved_version" "ralph fake 1.0.0" "RALPH_EVAL_BINARY should override version command"
 assert_eq "$resolved_run" "fake-ralph run --dry-run" "RALPH_EVAL_BINARY should override run command"
+assert_eq "$resolved_timed_run" "fake-ralph run --dry-run" "timeout wrapper should invoke resolved Ralph binary directly"
+assert_eq "$resolved_path_ralph" "$fake_ralph_on_path" "PATH should prefer the selected Ralph binary for in-agent tool calls"
 
 echo "evaluate-preset parsing tests passed"

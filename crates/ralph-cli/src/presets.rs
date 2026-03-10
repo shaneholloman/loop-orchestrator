@@ -230,10 +230,11 @@ mod tests {
         let config =
             RalphConfig::parse_yaml(preset.content).expect("embedded preset YAML should parse");
 
+        assert_eq!(config.core.specs_dir, ".agents/scratchpad/");
         assert!(
             preset
                 .content
-                .contains(".agents/planning/{spec_name}/idea-honing.md")
+                .contains(".agents/scratchpad/implementation/{spec_name}/idea-honing.md")
         );
         assert!(!preset.content.contains("requirements-interview.md"));
 
@@ -265,6 +266,23 @@ mod tests {
             vec!["review.ready".to_string(), "build.blocked".to_string()]
         );
         assert_eq!(builder.default_publishes.as_deref(), Some("build.blocked"));
+        assert!(builder.instructions.contains("`task_id`"));
+        assert!(builder.instructions.contains("`task_key`"));
+        assert!(
+            builder
+                .instructions
+                .contains("ralph tools task show <task_id> --format json")
+        );
+        assert!(
+            builder
+                .instructions
+                .contains("ralph tools task start <task_id>")
+        );
+        assert!(
+            builder
+                .instructions
+                .contains("ONE runtime task / code task pair per iteration")
+        );
 
         let critic = config.hats.get("critic").expect("critic hat should exist");
         assert_eq!(critic.triggers, vec!["review.ready".to_string()]);
@@ -273,6 +291,13 @@ mod tests {
             vec!["review.passed".to_string(), "review.rejected".to_string()]
         );
         assert_eq!(critic.default_publishes.as_deref(), Some("review.rejected"));
+        assert!(critic.instructions.contains("`task_id`, `task_key`"));
+        assert!(
+            critic
+                .instructions
+                .contains("ralph tools task show <task_id> --format json")
+        );
+        assert!(critic.instructions.contains("ralph tools memory add"));
 
         let finalizer = config
             .hats
@@ -282,7 +307,7 @@ mod tests {
         assert_eq!(
             finalizer.publishes,
             vec![
-                "tasks.ready".to_string(),
+                "queue.advance".to_string(),
                 "implementation.ready".to_string(),
                 "finalization.failed".to_string(),
             ]
@@ -290,6 +315,55 @@ mod tests {
         assert_eq!(
             finalizer.default_publishes.as_deref(),
             Some("finalization.failed")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("ralph tools task close <task_id>")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("ralph tools task reopen <task_id>")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("implementation runtime tasks are closed")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("Task Writer owns wave creation")
+        );
+
+        let task_writer = config
+            .hats
+            .get("task_writer")
+            .expect("task_writer hat should exist");
+        assert_eq!(
+            task_writer.triggers,
+            vec!["plan.ready".to_string(), "queue.advance".to_string()]
+        );
+        assert!(
+            task_writer
+                .instructions
+                .contains("Mirror ONLY Step 1's code task files into runtime tasks")
+        );
+        assert!(
+            task_writer
+                .instructions
+                .contains("mirror ONLY that next step's code task files into runtime tasks")
+        );
+        assert!(
+            task_writer
+                .instructions
+                .contains("`pdd:{spec_name}:step-01:{task_slug}`")
+        );
+        assert!(
+            task_writer
+                .instructions
+                .contains("runtime tasks are the live queue")
         );
 
         let validator = config
@@ -300,6 +374,14 @@ mod tests {
             validator.default_publishes.as_deref(),
             Some("validation.failed")
         );
+        assert!(validator.instructions.contains(
+            "validation runtime task with a stable key like `pdd:{spec_name}:validation`"
+        ));
+        assert!(
+            validator
+                .instructions
+                .contains("implementation runtime tasks are closed")
+        );
 
         let committer = config
             .hats
@@ -307,15 +389,21 @@ mod tests {
             .expect("committer hat should exist");
         assert_eq!(committer.default_publishes, None);
         assert_eq!(committer.publishes, vec!["LOOP_COMPLETE".to_string()]);
+        assert!(
+            committer
+                .instructions
+                .contains("commit runtime task with a stable key like `pdd:{spec_name}:commit`")
+        );
+        assert!(!committer.instructions.contains("assisted-by note"));
     }
 
     #[test]
-    fn test_code_assist_uses_shared_planning_dir_and_builder_workflow() {
+    fn test_code_assist_uses_upstream_artifact_layout_and_builder_workflow() {
         let preset = get_preset("code-assist").expect("code-assist should exist");
         let config =
             RalphConfig::parse_yaml(preset.content).expect("embedded preset YAML should parse");
 
-        assert_eq!(config.core.specs_dir, ".agents/planning/");
+        assert_eq!(config.core.specs_dir, ".agents/scratchpad/");
         assert_eq!(
             config.event_loop.required_events,
             vec!["review.passed".to_string()]
@@ -328,11 +416,60 @@ mod tests {
         assert!(
             planner
                 .instructions
-                .contains(".agents/planning/{task_name}/")
+                .contains(".agents/scratchpad/implementation/{task_name}/")
         );
+        assert!(
+            planner
+                .instructions
+                .contains("one file, one function, or one user-facing behavior")
+        );
+        assert!(
+            planner
+                .instructions
+                .contains("Runtime tasks are the canonical execution queue")
+        );
+        assert!(
+            planner
+                .instructions
+                .contains("Use `ralph tools task ensure` with a stable key")
+        );
+        assert!(
+            planner
+                .instructions
+                .contains("`code-assist:{task_name}:step-01:{slug}`")
+        );
+        assert!(
+            planner
+                .instructions
+                .contains("`code-assist:{task_name}:step-02:{slug}`")
+        );
+        assert_eq!(
+            planner.triggers,
+            vec!["build.start".to_string(), "queue.advance".to_string()]
+        );
+        assert!(planner.instructions.contains("`task_id`"));
+        assert!(planner.instructions.contains("`task_key`"));
         assert!(planner.instructions.contains("context.md"));
         assert!(planner.instructions.contains("plan.md"));
         assert!(planner.instructions.contains("progress.md"));
+        assert!(!planner.instructions.contains("rough-idea.md"));
+        assert!(
+            planner
+                .instructions
+                .contains("`plan.md` MUST be a numbered step plan")
+        );
+        assert!(planner.instructions.contains("`## Current Step`"));
+        assert!(planner.instructions.contains("`## Active Wave`"));
+        assert!(
+            planner
+                .instructions
+                .contains("Only one step's wave may exist as open/ready work at a time.")
+        );
+        assert!(
+            planner
+                .instructions
+                .contains("You MUST NOT create future-step waves early")
+        );
 
         let builder = config
             .hats
@@ -343,6 +480,21 @@ mod tests {
                 .instructions
                 .contains("Read `CODEASSIST.md` if it exists in the repo root")
         );
+        assert!(
+            builder
+                .instructions
+                .contains("the runtime task from the event payload via `ralph tools task show <task_id> --format json`")
+        );
+        assert!(
+            builder.instructions.contains(
+                "Read the task title, description, requirements, and acceptance criteria"
+            )
+        );
+        assert!(
+            builder
+                .instructions
+                .contains("Start the task with `ralph tools task start <task_id>`")
+        );
         assert!(builder.instructions.contains(
             "Keep documentation in the shared docs directory and code in the repo itself"
         ));
@@ -352,17 +504,80 @@ mod tests {
                 .instructions
                 .contains("You MUST keep implementation code out of the shared docs directory")
         );
+        assert!(
+            builder
+                .instructions
+                .contains("`progress.md` is a verification/log summary. It is NOT the queue.")
+        );
+        assert!(
+            builder
+                .instructions
+                .contains("You MUST implement the runtime task from the current payload")
+        );
+        assert!(builder.instructions.contains(
+            "finish with a minimally runnable skeleton that satisfies the task description"
+        ));
+        assert!(
+            builder
+                .instructions
+                .contains("Implement exactly one runtime task per iteration.")
+        );
 
         let finalizer = config
             .hats
             .get("finalizer")
             .expect("finalizer hat should exist");
+        assert_eq!(
+            finalizer.publishes,
+            vec![
+                "queue.advance".to_string(),
+                "finalization.failed".to_string(),
+                "LOOP_COMPLETE".to_string(),
+            ]
+        );
         assert!(
             finalizer
                 .instructions
-                .contains("shared documentation directory")
+                .contains("runtime tasks as the canonical completion gate")
         );
-        assert!(finalizer.instructions.contains("plan.md`, `progress.md`"));
+        assert!(
+            finalizer
+                .instructions
+                .contains("ralph tools task close <task_id>")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("ralph tools task reopen <task_id>")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains(".agents/scratchpad/implementation/{task_name}/")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("Do not go hunting for planner docs under `.eval-sandbox/code-assist/`.")
+        );
+        assert!(finalizer.instructions.contains(
+            "`queue.advance` if the current step still has open work OR later planned steps remain"
+        ));
+        assert!(
+            !finalizer
+                .instructions
+                .contains("`task.complete` if more runtime work remains")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("You MUST NOT ensure the next step's runtime tasks yourself because Planner owns wave creation")
+        );
+        assert!(
+            finalizer
+                .instructions
+                .contains("all planned steps are complete and no runtime tasks remain open")
+        );
     }
 
     #[test]
@@ -385,23 +600,32 @@ mod tests {
             .expect("reviewer hat should exist");
         assert_eq!(
             reviewer.triggers,
-            vec!["review.start".to_string(), "analysis.complete".to_string()]
+            vec!["review.start".to_string(), "review.followup".to_string()]
         );
+        assert_eq!(reviewer.publishes, vec!["review.section".to_string()]);
         assert_eq!(
-            reviewer.publishes,
-            vec!["review.section".to_string(), "REVIEW_COMPLETE".to_string()]
+            reviewer.default_publishes.as_deref(),
+            Some("review.section")
         );
         assert!(reviewer.instructions.contains("On `review.start`:"));
+        assert!(reviewer.instructions.contains("On `review.followup`:"));
         assert!(
             reviewer
                 .instructions
                 .contains("Emit exactly one `review.section`")
         );
-        assert!(reviewer.instructions.contains("On `analysis.complete`:"));
+        assert!(reviewer.instructions.contains("`review:step-01:primary`"));
+        assert!(reviewer.instructions.contains("`review:step-02:{slug}`"));
+        assert!(reviewer.instructions.contains("`task_id` and `task_key`"));
         assert!(
             reviewer
                 .instructions
-                .contains("Emit exactly one `REVIEW_COMPLETE`")
+                .contains("Writing `findings.md` alone does not complete the turn")
+        );
+        assert!(
+            reviewer
+                .instructions
+                .contains("Do not try to produce the final report on this first pass")
         );
         assert!(
             reviewer
@@ -415,7 +639,10 @@ mod tests {
             .expect("analyzer hat should exist");
         assert_eq!(analyzer.triggers, vec!["review.section".to_string()]);
         assert_eq!(analyzer.publishes, vec!["analysis.complete".to_string()]);
-        assert_eq!(analyzer.default_publishes, None);
+        assert_eq!(
+            analyzer.default_publishes.as_deref(),
+            Some("analysis.complete")
+        );
         assert!(
             analyzer
                 .instructions
@@ -424,8 +651,182 @@ mod tests {
         assert!(
             analyzer
                 .instructions
+                .contains("ralph tools task start <analysis_task_id>")
+        );
+        assert!(
+            analyzer
+                .instructions
+                .contains("ralph tools task close <analysis_task_id>")
+        );
+        assert!(
+            analyzer
+                .instructions
                 .contains("adversarial or failure-path case")
         );
+        assert!(
+            analyzer
+                .instructions
+                .contains("Writing `findings.md` alone does not complete the turn")
+        );
+        assert!(
+            analyzer
+                .instructions
+                .contains("Do not append a long prose recap after the emit command.")
+        );
+
+        let closer = config.hats.get("closer").expect("closer hat should exist");
+        assert_eq!(closer.triggers, vec!["analysis.complete".to_string()]);
+        assert_eq!(
+            closer.publishes,
+            vec!["review.followup".to_string(), "REVIEW_COMPLETE".to_string()]
+        );
+        assert_eq!(closer.default_publishes, None);
+        assert!(closer.instructions.contains(
+            "If task lookup is noisy or slow, skip the closure work and finish the review"
+        ));
+        assert!(
+            closer
+                .instructions
+                .contains("\"$RALPH_BIN\" tools task close <primary_task_id>")
+        );
+        assert!(
+            closer
+                .instructions
+                .contains("emit exactly one `review.followup` event")
+        );
+        assert!(
+            closer
+                .instructions
+                .contains("emit exactly one `REVIEW_COMPLETE`")
+        );
+        assert!(
+            closer
+                .instructions
+                .contains("Do not create tasks yourself.")
+        );
+        assert!(closer.instructions.contains(
+            "real `ralph emit \"review.followup\" ...` or `ralph emit \"REVIEW_COMPLETE\" ...`"
+        ));
+    }
+
+    #[test]
+    fn test_research_uses_runtime_tasks_and_memory_discipline() {
+        let preset = get_preset("research").expect("research preset should exist");
+        let config =
+            RalphConfig::parse_yaml(preset.content).expect("embedded preset YAML should parse");
+
+        assert_eq!(config.core.specs_dir, ".agents/scratchpad/");
+        assert_eq!(
+            config.event_loop.required_events,
+            vec!["research.finding".to_string()]
+        );
+
+        let researcher = config
+            .hats
+            .get("researcher")
+            .expect("researcher hat should exist");
+        assert_eq!(researcher.publishes, vec!["research.finding".to_string()]);
+        assert_eq!(
+            researcher.default_publishes.as_deref(),
+            Some("research.finding")
+        );
+        assert!(
+            researcher
+                .instructions
+                .contains("Runtime tasks are the canonical queue")
+        );
+        assert!(
+            researcher
+                .instructions
+                .contains(".eval-sandbox/research/plan.md")
+        );
+        assert!(
+            researcher
+                .instructions
+                .contains("`research:step-01:primary`")
+        );
+        assert!(
+            researcher
+                .instructions
+                .contains("`research:step-02:{slug}`")
+        );
+        assert!(
+            researcher
+                .instructions
+                .contains("ralph tools task start <task_id>")
+        );
+        assert!(researcher.instructions.contains("ralph tools memory add"));
+        assert!(researcher.instructions.contains("`task_id` and `task_key`"));
+        assert!(
+            researcher
+                .instructions
+                .contains("only the CURRENT research wave may exist as open work")
+        );
+        assert!(
+            researcher
+                .instructions
+                .contains("Do NOT investigate that next wave inline in the same turn.")
+        );
+        assert!(
+            researcher.instructions.contains(
+                "As soon as you have 3-6 concrete evidence points with file:line support"
+            )
+        );
+        assert!(researcher.instructions.contains(
+            "If `.eval-sandbox/research/summary.md` already contains the current wave's answer"
+        ));
+        assert!(researcher.instructions.contains(
+            "The turn is incomplete until a real `ralph emit \"research.finding\" ...` command succeeds."
+        ));
+        assert!(researcher.instructions.contains(
+            "❌ End the turn after writing `summary.md` without emitting `research.finding`"
+        ));
+        assert!(
+            researcher
+                .instructions
+                .contains("❌ Keep browsing once you already have enough evidence for this wave")
+        );
+
+        let synthesizer = config
+            .hats
+            .get("synthesizer")
+            .expect("synthesizer hat should exist");
+        assert!(
+            synthesizer
+                .instructions
+                .contains("Runtime tasks are the completion gate")
+        );
+        assert!(
+            synthesizer
+                .instructions
+                .contains("ralph tools task show <task_id> --format json")
+        );
+        assert!(
+            synthesizer.instructions.contains(
+                "If the payload omitted `task_id`, resolve the active task from open tasks"
+            )
+        );
+        assert!(
+            synthesizer
+                .instructions
+                .contains("ralph tools task close <task_id>")
+        );
+        assert!(
+            synthesizer
+                .instructions
+                .contains("`research:step-02:{slug}`")
+        );
+        assert!(
+            synthesizer.instructions.contains(
+                "Every synthesizer turn MUST finish with exactly one `ralph emit` command"
+            )
+        );
+        assert!(synthesizer.instructions.contains(
+            "A gap merely mentioned in the summary does NOT satisfy the follow-up requirement."
+        ));
+        assert!(synthesizer.instructions.contains(
+            "all planned research waves are complete, and no research follow-up tasks remain open"
+        ));
     }
 
     #[test]
@@ -481,6 +882,17 @@ mod tests {
         assert!(
             investigator
                 .instructions
+                .contains("Use a real `ralph emit` command. Example:")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("ralph tools task start <task_id>")
+        );
+        assert!(investigator.instructions.contains("`task_id`, `task_key`"));
+        assert!(
+            investigator
+                .instructions
                 .contains("On `hypothesis.confirmed`:")
         );
         assert!(investigator.instructions.contains("emit `fix.propose`"));
@@ -489,6 +901,11 @@ mod tests {
             investigator
                 .instructions
                 .contains("Emit exactly one `DEBUG_COMPLETE`")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("Use a real `ralph emit` command, not prose.")
         );
         assert!(
             investigator
@@ -526,8 +943,16 @@ mod tests {
         assert!(
             tester
                 .instructions
+                .contains("ralph tools task start <task_id>")
+        );
+        assert!(
+            tester
+                .instructions
                 .contains("nearby adversarial or neighboring failure-path case")
         );
+        assert!(tester.instructions.contains(
+            "Use a real `ralph emit` command. The turn is incomplete until that command succeeds."
+        ));
 
         let fixer = config.hats.get("fixer").expect("fixer hat should exist");
         assert_eq!(
@@ -540,6 +965,23 @@ mod tests {
             fixer
                 .instructions
                 .contains("❌ Make commits in this preset")
+        );
+        assert!(
+            fixer
+                .instructions
+                .contains("ralph tools task start <task_id>")
+        );
+        assert!(fixer.instructions.contains("ralph tools memory add"));
+        assert!(fixer.instructions.contains(
+            "Use a real `ralph emit` command. Writing code, notes, or tests alone does not complete the turn."
+        ));
+        assert!(fixer.instructions.contains(
+            "If the proposed fix is already present in the code, do NOT rewrite the code or tests."
+        ));
+        assert!(
+            fixer
+                .instructions
+                .contains("Write the required root-cause note in `.eval-sandbox/debug/counter.md`")
         );
 
         let verifier = config
@@ -555,6 +997,17 @@ mod tests {
             verifier
                 .instructions
                 .contains("Re-run at least one nearby adversarial or failure-path case.")
+        );
+        assert!(
+            verifier
+                .instructions
+                .contains("ralph tools task start <task_id>")
+        );
+        assert!(verifier.instructions.contains("`task_id`/`task_key`"));
+        assert!(
+            verifier
+                .instructions
+                .contains("The turn is incomplete until the `ralph emit` command succeeds.")
         );
     }
 }

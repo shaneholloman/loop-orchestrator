@@ -2328,10 +2328,21 @@ pub async fn run_loop_impl(
             }
         }
 
-        // Inject default_publishes for active hats only when agent wrote no events
+        // Inject default_publishes for active hats only when agent wrote no events.
+        // Prefer the displayed execution hat first so a non-emitting turn still
+        // falls back to the hat the user actually saw in the banner.
         if !agent_wrote_events {
-            let active_hats = event_loop.state().last_active_hat_ids.clone();
-            for active_hat_id in &active_hats {
+            let mut fallback_hats = Vec::new();
+            if display_hat.as_str() != "ralph" {
+                fallback_hats.push(display_hat.clone());
+            }
+            for active_hat_id in event_loop.state().last_active_hat_ids.clone() {
+                if !fallback_hats.contains(&active_hat_id) {
+                    fallback_hats.push(active_hat_id);
+                }
+            }
+
+            for active_hat_id in &fallback_hats {
                 event_loop.check_default_publishes(active_hat_id);
                 if event_loop.has_pending_events() {
                     break; // One default is sufficient

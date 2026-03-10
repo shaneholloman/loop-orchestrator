@@ -404,7 +404,7 @@ Its content is auto-injected in `<scratchpad>` tags at the top of your context e
 
 **Do NOT use for:**
 - Tracking what tasks exist or their status (use `ralph tools task`)
-- Checklists or todo lists (use `ralph tools task add`)
+- Checklists or todo lists (use `ralph tools task ensure` when a stable key exists, otherwise `ralph tools task add`)
 
 ",
             scratchpad = self.core.scratchpad,
@@ -421,6 +421,7 @@ Its content is auto-injected in `<scratchpad>` tags at the top of your context e
 - Work items, their status, priorities, and dependencies\n\
 - Source of truth for progress across iterations\n\
 - Auto-injected in `<ready-tasks>` tags at the top of your context\n\
+- Use `ensure` for stable/idempotent work items, `start` when you begin, `close` when verified, and `reopen`/`fail` when work must continue later\n\
 \n\
 **Scratchpad** (`{scratchpad}`) — Your thinking:\n\
 - Current understanding and reasoning\n\
@@ -431,12 +432,24 @@ Its content is auto-injected in `<scratchpad>` tags at the top of your context e
 - Codebase patterns and conventions\n\
 - Architectural decisions and rationale\n\
 - Recurring problem solutions\n\
+- Search before acting in unfamiliar areas; add durable learnings when they will help future runs\n\
 \n\
 **Context Files** (`.ralph/agent/*.md`) — Research artifacts:\n\
 - Analysis and temporary notes\n\
 - Read when relevant\n\
 \n\
-**Rule:** Work items go in tasks. Thinking goes in scratchpad. Learnings go in memories.\n\
+**Rule:** Work items go in tasks. Thinking goes in scratchpad. Learnings go in memories. Decisions with confidence <= 80 go in `.ralph/agent/decisions.md`.\n\
+\n\
+**Tool reliability rule:** Do NOT waste turns debugging PATH, shell startup files, or whether `ralph` exists. If the loop is running, assume `ralph emit` and `ralph tools` are available.\n\
+The loop sets `$RALPH_BIN` to the current Ralph executable. Prefer `$RALPH_BIN emit ...` and `$RALPH_BIN tools ...` when you need a direct command form.\n\
+You MUST NEVER run `which ralph`, `type ralph`, `ralph --version`, or similar availability probes inside the loop.\n\
+You MUST NEVER burn turns on environment-probe commands such as `echo`, `pwd`, `ls`, `id`, `stat`, `command -v`, `which`, `type`, or tool `--version` checks unless the task is specifically about diagnosing the shell/runtime.\n\
+You MUST NOT redirect scratch output or temporary logs into `/tmp`. Use `/var/tmp` or a project-local `logs/` directory instead.\n\
+Do NOT infer failure from empty or terse stdout alone.\n\
+- Confirm task commands by reading `.ralph/agent/tasks.jsonl`\n\
+- Confirm emits by reading `.ralph/current-events` or `.ralph/events-*.jsonl`\n\
+- Confirm file/build/test commands by reading the files or artifacts they changed\n\
+Prefer real work commands and side-effect checks over `which`, `type`, `--version`, `echo`, or PATH probes.\n\
 \n",
             scratchpad = self.core.scratchpad,
         ));
@@ -509,7 +522,10 @@ You MUST NOT plan or analyze — delegate now.
 
 ### 1. PLAN
 You MUST update `{scratchpad}` with your understanding and plan.
-You MUST create tasks with `ralph tools task add` for each work item (check `<ready-tasks>` first to avoid duplicates).
+You MUST check `<ready-tasks>` first.
+You MUST represent work items with runtime tasks using `ralph tools task ensure` when you can derive a stable key, otherwise `ralph tools task add`.
+You SHOULD search memories with `ralph tools memory search` before acting in unfamiliar areas.
+If confidence is 80 or below on a consequential decision, you MUST document it in `.ralph/agent/decisions.md`.
 
 ### 2. DELEGATE
 You MUST emit exactly ONE next event via `ralph emit` to hand off to specialized hats.
@@ -548,19 +564,25 @@ You MUST study, explore, and research what needs to be done.
 
 ### 2. PLAN
 You MUST update `{scratchpad}` with your understanding and plan.
-You MUST create tasks with `ralph tools task add` for each work item (check `<ready-tasks>` first to avoid duplicates).
+You MUST check `<ready-tasks>` first.
+You MUST represent work items with runtime tasks using `ralph tools task ensure` when you can derive a stable key, otherwise `ralph tools task add`.
+You SHOULD search memories with `ralph tools memory search` before acting in unfamiliar areas.
+If confidence is 80 or below on a consequential decision, you MUST document it in `.ralph/agent/decisions.md`.
 
 ### 3. IMPLEMENT
 You MUST pick exactly ONE task from `<ready-tasks>` to implement.
+You MUST mark it in progress with `ralph tools task start <id>` before implementation.
 
 ### 4. VERIFY & COMMIT
 You MUST run tests and verify the implementation works.
 If the target is runnable or user-facing, you MUST exercise it with the strongest available harness (Playwright, tmux, real CLI/API) before committing.
 You SHOULD try at least one realistic failure-path or adversarial input during verification.
+If this turn is likely to take more than a few minutes, you SHOULD send `ralph tools interact progress`.
 You MUST commit after verification passes - one commit per task.
 You SHOULD run `git diff --cached` to review staged changes before committing.
 You MUST close the task with `ralph tools task close <id>` AFTER commit.
 You SHOULD save learnings to memories with `ralph tools memory add`.
+If a command fails, a dependency is missing, or work becomes blocked and you cannot resolve it in this iteration, you MUST record a `fix` memory and `ralph tools task fail <id>` or `ralph tools task reopen <id>` before stopping.
 You MUST update scratchpad with what you learned (tasks track what remains).
 
 ### 5. EXIT
@@ -885,9 +907,9 @@ You MUST NOT print any text after `{}`.
             section.push_str(
                 r"
 **Before declaring completion:**
-1. Run `ralph tools task ready` to check for open tasks
-2. If any tasks are open, complete them first
-3. Only declare completion when YOUR tasks are all closed
+1. Run `ralph tools task list` to check for any remaining non-terminal tasks
+2. If any tasks are still open or in progress, close, fail, or reopen them first
+3. Only declare completion when YOUR tasks for this objective are all terminal
 
 Tasks from other parallel loops are filtered out automatically. You only need to verify tasks YOU created for THIS objective are complete.
 
@@ -1699,7 +1721,7 @@ hats:
         );
         // And tasks CLI
         assert!(
-            prompt.contains("ralph tools task add"),
+            prompt.contains("ralph tools task ensure"),
             "Multi-hat workflow should reference tasks CLI when memories enabled"
         );
     }
@@ -1755,8 +1777,8 @@ hats:
         // The tasks CLI instructions are now injected via the skills pipeline,
         // but the DONE section still requires task verification before completion
         assert!(
-            prompt.contains("ralph tools task ready"),
-            "Should reference task ready command in DONE section"
+            prompt.contains("ralph tools task list"),
+            "Should reference task list command in DONE section"
         );
         assert!(
             prompt.contains("MUST NOT declare completion while tasks remain open"),
@@ -1782,6 +1804,10 @@ hats:
         assert!(
             prompt.contains("run tests and verify"),
             "Should require verification"
+        );
+        assert!(
+            prompt.contains("ralph tools task start"),
+            "Should reference task start command"
         );
         assert!(
             prompt.contains("ralph tools task close"),

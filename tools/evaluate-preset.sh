@@ -151,6 +151,7 @@ resolve_ralph_command() {
                 echo -e "${RED}Error: RALPH_EVAL_BINARY is not executable: ${RALPH_EVAL_BINARY}${NC}" >&2
                 exit 1
             fi
+            export PATH="$(dirname "$RALPH_EVAL_BINARY"):$PATH"
             RALPH_CMD=("$RALPH_EVAL_BINARY")
         else
             if ! command -v "$RALPH_EVAL_BINARY" >/dev/null 2>&1; then
@@ -166,6 +167,12 @@ resolve_ralph_command() {
 
 run_ralph() {
     "${RALPH_CMD[@]}" "$@"
+}
+
+run_ralph_with_timeout() {
+    local timeout_seconds=$1
+    shift
+    timeout --foreground "$timeout_seconds" "${RALPH_CMD[@]}" "$@"
 }
 
 completion_promise_reached() {
@@ -366,12 +373,11 @@ fi
 # Run ralph with the merged config
 set +e  # Don't exit on error - we want to capture failures
 # Use --foreground to allow Ctrl+C to propagate to child processes
-timeout --foreground "$TIMEOUT" \
-    run_ralph run \
-        -c "$TEMP_CONFIG" \
-        -p "$TEST_TASK" \
-        --record-session "$LOG_DIR/session.jsonl" \
-        2>&1 | tee "$LOG_DIR/output.log"
+run_ralph_with_timeout "$TIMEOUT" run \
+    -c "$TEMP_CONFIG" \
+    -p "$TEST_TASK" \
+    --record-session "$LOG_DIR/session.jsonl" \
+    2>&1 | tee "$LOG_DIR/output.log"
 
 RAW_EXIT_CODE=$?
 set -e

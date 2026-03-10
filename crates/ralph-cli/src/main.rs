@@ -183,6 +183,49 @@ pub(crate) fn default_config_path() -> PathBuf {
     PathBuf::from("ralph.yml")
 }
 
+pub(crate) fn resolve_workspace_root(root: Option<&PathBuf>) -> PathBuf {
+    if let Some(root) = root {
+        return root.clone();
+    }
+
+    if let Ok(value) = std::env::var("RALPH_WORKSPACE_ROOT")
+        && !value.trim().is_empty()
+    {
+        return PathBuf::from(value);
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    discover_workspace_root(&cwd).unwrap_or(cwd)
+}
+
+pub(crate) fn resolve_path_from_workspace(
+    path: impl AsRef<Path>,
+    root: Option<&PathBuf>,
+) -> PathBuf {
+    resolve_workspace_root(root).join(path)
+}
+
+fn discover_workspace_root(start: &Path) -> Option<PathBuf> {
+    start.ancestors().find_map(|dir| {
+        let has_ralph = dir.join(".ralph").is_dir();
+        let has_git = dir.join(".git").exists();
+        if has_ralph || has_git {
+            Some(dir.to_path_buf())
+        } else {
+            None
+        }
+    })
+}
+
+fn resolve_marker_target(workspace_root: &Path, marker_value: &str) -> PathBuf {
+    let path = PathBuf::from(marker_value.trim());
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_root.join(path)
+    }
+}
+
 /// Verbosity level for streaming output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Verbosity {
@@ -2145,14 +2188,16 @@ fn init_command(color_mode: ColorMode, args: InitArgs) -> Result<()> {
 
 fn events_command(color_mode: ColorMode, args: EventsArgs) -> Result<()> {
     let use_colors = color_mode.should_use_colors();
+    let workspace_root = resolve_workspace_root(None);
+    let current_events_marker = workspace_root.join(".ralph/current-events");
 
     // Read events path from marker file, fall back to default if marker doesn't exist
     // This ensures `ralph events` reads from the same events file as the active run
     let history = match args.file {
         Some(path) => EventHistory::new(path),
-        None => fs::read_to_string(".ralph/current-events")
-            .map(|s| EventHistory::new(s.trim()))
-            .unwrap_or_else(|_| EventHistory::default_path()),
+        None => fs::read_to_string(&current_events_marker)
+            .map(|s| EventHistory::new(resolve_marker_target(&workspace_root, &s)))
+            .unwrap_or_else(|_| EventHistory::new(workspace_root.join(".ralph/events.jsonl"))),
     };
 
     // Handle clear command
@@ -2319,6 +2364,8 @@ fn clean_command(
 /// (created by `ralph run`), or falls back to `.ralph/events.jsonl` if no marker exists.
 fn emit_command(color_mode: ColorMode, args: EmitArgs) -> Result<()> {
     let use_colors = color_mode.should_use_colors();
+    let workspace_root = resolve_workspace_root(None);
+    let current_events_marker = workspace_root.join(".ralph/current-events");
 
     // Generate timestamp if not provided
     let ts = args.ts.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
@@ -2349,8 +2396,8 @@ fn emit_command(color_mode: ColorMode, args: EmitArgs) -> Result<()> {
 
     // Read events path from marker file, fall back to CLI arg if marker doesn't exist
     // This ensures `ralph emit` writes to the same events file as the active run
-    let events_file = fs::read_to_string(".ralph/current-events")
-        .map(|s| PathBuf::from(s.trim()))
+    let events_file = fs::read_to_string(&current_events_marker)
+        .map(|s| resolve_marker_target(&workspace_root, &s))
         .unwrap_or_else(|_| args.file.clone());
 
     // Ensure parent directory exists
@@ -2667,6 +2714,7 @@ mod tests {
     use crate::test_support::CwdGuard;
     use ralph_core::{HookMutationConfig, HookOnError, HookPhaseEvent, HookSpec};
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn test_verbosity_cli_quiet() {
@@ -2875,6 +2923,49 @@ mod tests {
             }
             other => panic!("unexpected CLI parse result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_discovers_ancestor_ralph_dir() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(temp_dir.path().join(".ralph")).expect("ralph dir");
+        let nested = temp_dir.path().join("a/b/c");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        let _cwd = CwdGuard::set(&nested);
+
+        assert_eq!(resolve_workspace_root(None), temp_dir.path().to_path_buf());
+    }
+
+    #[test]
+    fn test_emit_command_resolves_marker_relative_to_workspace_root_from_nested_dir() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path();
+        std::fs::create_dir_all(workspace.join(".ralph")).expect("ralph dir");
+        std::fs::write(
+            workspace.join(".ralph/current-events"),
+            ".ralph/events-20260309-test.jsonl\n",
+        )
+        .expect("write marker");
+        let nested = workspace.join("nested/project");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        let _cwd = CwdGuard::set(&nested);
+
+        emit_command(
+            ColorMode::Never,
+            EmitArgs {
+                topic: "debug.step".to_string(),
+                payload: "task_id=demo".to_string(),
+                json: false,
+                ts: Some("2026-03-09T00:00:00Z".to_string()),
+                file: PathBuf::from(".ralph/events.jsonl"),
+            },
+        )
+        .expect("emit command");
+
+        let events = std::fs::read_to_string(workspace.join(".ralph/events-20260309-test.jsonl"))
+            .expect("read events");
+        assert!(events.contains("\"topic\":\"debug.step\""));
+        assert!(events.contains("task_id=demo"));
     }
 
     #[test]

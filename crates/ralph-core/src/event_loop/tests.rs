@@ -335,7 +335,7 @@ fn test_completion_promise_detection() {
 }
 
 #[test]
-fn test_completion_promise_with_open_tasks_still_terminates() {
+fn test_completion_promise_with_open_tasks_in_scratchpad_still_terminates() {
     use std::fs;
     use tempfile::TempDir;
 
@@ -360,20 +360,20 @@ fn test_completion_promise_with_open_tasks_still_terminates() {
     let events_path = temp_dir.path().join("events.jsonl");
     event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    // LOOP_COMPLETE event with pending tasks - should STILL terminate (trust the agent)
-    // Previously this would reject completion, but now we trust the agent's decision
+    // Scratchpad mode still trusts the agent's completion signal even with open checklist items.
     write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
     let _ = event_loop.process_events_from_jsonl();
     let reason = event_loop.check_completion_event();
     assert_eq!(
         reason,
         Some(TerminationReason::CompletionPromise),
-        "Should terminate even with open tasks - trust the agent's decision"
+        "Scratchpad mode should still trust the agent's decision"
     );
 }
 
 #[test]
-fn test_completion_promise_with_pending_tasks_in_task_store() {
+fn test_completion_promise_with_pending_tasks_in_task_store_is_rejected() {
+    use crate::loop_context::LoopContext;
     use crate::task::{Task, TaskStatus};
     use crate::task_store::TaskStore;
     use tempfile::TempDir;
@@ -396,21 +396,24 @@ fn test_completion_promise_with_pending_tasks_in_task_store() {
     config.memories.enabled = true;
     config.core.workspace_root = temp_dir.path().to_path_buf();
 
-    let mut event_loop = EventLoop::new(config);
+    let loop_context = LoopContext::primary(temp_dir.path().to_path_buf());
+    let mut event_loop = EventLoop::with_context(config, loop_context);
     event_loop.initialize("Test");
 
     let events_path = temp_dir.path().join("events.jsonl");
     event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    // LOOP_COMPLETE event with open tasks in task store - should STILL terminate
-    // The agent knows when the objective is done; not all tasks need to be closed
+    // Runtime tasks are the canonical queue in memories/tasks mode, so completion should be rejected.
     write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
     let _ = event_loop.process_events_from_jsonl();
     let reason = event_loop.check_completion_event();
     assert_eq!(
-        reason,
-        Some(TerminationReason::CompletionPromise),
-        "Should terminate even with open tasks in task store - trust the agent"
+        reason, None,
+        "Should reject completion while runtime tasks remain pending"
+    );
+    assert!(
+        event_loop.has_pending_events(),
+        "Rejecting completion should inject task.resume so the loop continues"
     );
 }
 
