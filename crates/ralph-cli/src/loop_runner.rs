@@ -18,8 +18,9 @@ use ralph_core::{
     HookPayloadContextInput, HookPhaseEvent, HookRunRequest, HookRunResult, HookSuspendMode,
     LoopCompletionHandler, LoopContext, LoopHistory, LoopRegistry, MergeQueue, RalphConfig, Record,
     SessionRecorder, SummaryWriter, SuspendStateRecord, SuspendStateStore, TerminationReason,
+    UrgentSteerStore,
 };
-use ralph_proto::{Event, GuidanceTarget, HatId, RpcEvent, RpcState, RpcTaskCounts};
+use ralph_proto::{Event, HatId, RpcEvent, RpcState, RpcTaskCounts};
 use ralph_tui::Tui;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -163,6 +164,14 @@ pub async fn run_loop_impl(
     let ctx = loop_context
         .clone()
         .unwrap_or_else(|| LoopContext::primary(config.core.workspace_root.clone()));
+    let urgent_steer_path = ctx.urgent_steer_path();
+    let urgent_steer_store = UrgentSteerStore::new(urgent_steer_path.clone());
+    urgent_steer_store
+        .clear()
+        .context("Failed to clear stale urgent-steer marker")?;
+    let _urgent_steer_cleanup = scopeguard::guard(urgent_steer_path.clone(), |path| {
+        let _ = UrgentSteerStore::new(path).clear();
+    });
 
     // Write loop ID to marker file for task ownership tracking.
     // For worktree loops, use the loop_id; for primary loops, generate one.
@@ -450,6 +459,7 @@ pub async fn run_loop_impl(
                 .clone()
                 .expect("RPC guidance tx should exist"),
             rpc_event_tx.clone().expect("RPC event tx should exist"),
+            Some(urgent_steer_path.clone()),
             state_fn,
         );
 
@@ -496,7 +506,8 @@ pub async fn run_loop_impl(
         let tui = Tui::new()
             .with_hat_map(hat_map)
             .with_termination_signal(terminated_rx)
-            .with_events_path(resolve_current_events_path(&ctx));
+            .with_events_path(resolve_current_events_path(&ctx))
+            .with_urgent_steer_path(urgent_steer_path.clone());
 
         // Get shared state and guidance queue before spawning (for content streaming)
         let state = tui.state();
@@ -1015,74 +1026,15 @@ pub async fn run_loop_impl(
             return Ok(reason);
         }
 
-        // Drain next-loop guidance queue and write as human.guidance events.
-        // These will be picked up by process_events_from_jsonl() during build_prompt().
-        // Handle both TUI guidance queue and RPC guidance channel.
-        let mut guidance_messages: Vec<String> = Vec::new();
-
-        // Drain TUI guidance queue
-        if let Some(ref queue) = guidance_next_queue {
-            let messages: Vec<String> = {
-                let mut q = queue.lock().unwrap();
-                q.drain(..).collect()
-            };
-            guidance_messages.extend(messages);
-        }
-
-        // Drain RPC guidance channel (non-blocking)
-        if let Some(ref mut rx) = rpc_guidance_rx {
-            while let Ok(msg) = rx.try_recv() {
-                match msg.target {
-                    GuidanceTarget::Current => {
-                        debug!("Received RPC steer(current); applying at next prompt boundary");
-                        guidance_messages.push(msg.message);
-                    }
-                    GuidanceTarget::Next => guidance_messages.push(msg.message),
-                }
-            }
-        }
-
+        // Drain pending local guidance and inject it directly into the in-memory
+        // event loop so the next prompt boundary sees it immediately.
+        let guidance_messages =
+            drain_pending_guidance_messages(guidance_next_queue.as_ref(), rpc_guidance_rx.as_mut());
         if !guidance_messages.is_empty() {
-            let events_path = resolve_current_events_path(&ctx);
-
-            use std::io::Write;
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&events_path);
-
-            let mut writer = match file {
-                Ok(f) => std::io::BufWriter::new(f),
-                Err(e) => {
-                    warn!(error = %e, path = ?events_path, "Failed to open events file for guidance flush");
-                    // Skip flushing - keep loop running
-                    continue;
-                }
-            };
-
-            for msg in &guidance_messages {
-                let timestamp = chrono::Utc::now().to_rfc3339();
-                let event = serde_json::json!({
-                    "topic": "human.guidance",
-                    "payload": msg,
-                    "ts": timestamp,
-                });
-
-                match serde_json::to_string(&event) {
-                    Ok(line) => {
-                        if writeln!(writer, "{}", line).is_err() {
-                            warn!(path = ?events_path, "Failed writing guidance event line");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed serializing guidance event");
-                    }
-                }
-            }
+            event_loop.inject_human_guidance(guidance_messages.iter().cloned());
             info!(
                 count = guidance_messages.len(),
-                "Wrote guidance events to events.jsonl"
+                "Injected pending guidance into event loop"
             );
         }
 
@@ -1548,6 +1500,9 @@ pub async fn run_loop_impl(
                 continue;
             }
         };
+        if let Err(err) = urgent_steer_store.clear() {
+            warn!(error = %err, "Failed to clear urgent-steer marker after prompt build");
+        }
 
         let display_hat =
             resolve_display_hat_for_execution(&event_loop, &hat_id, &preview_display_hat);
@@ -2398,7 +2353,14 @@ pub async fn run_loop_impl(
         // Inject default_publishes for active hats only when agent wrote no events.
         // Prefer the displayed execution hat first so a non-emitting turn still
         // falls back to the hat the user actually saw in the banner.
-        if !agent_wrote_events && wave_events.is_empty() {
+        let urgent_steer_pending = urgent_steer_store.load().ok().flatten().is_some();
+        let urgent_steer_blocked_emit = output.contains("Urgent steer is pending.");
+        if should_inject_default_publishes(
+            agent_wrote_events,
+            &wave_events,
+            urgent_steer_pending,
+            urgent_steer_blocked_emit,
+        ) {
             let mut fallback_hats = Vec::new();
             if display_hat.as_str() != "ralph" {
                 fallback_hats.push(display_hat.clone());
@@ -2415,6 +2377,8 @@ pub async fn run_loop_impl(
                     break; // One default is sufficient
                 }
             }
+        } else if urgent_steer_pending || urgent_steer_blocked_emit {
+            debug!("Urgent steer active; skipping default_publishes handoff");
         }
 
         // Check cancellation first (no chain validation) — takes priority over completion
@@ -4117,6 +4081,44 @@ fn resolve_current_events_path(ctx: &LoopContext) -> PathBuf {
             }
         })
         .unwrap_or_else(|| ctx.events_path())
+}
+
+fn drain_pending_guidance_messages(
+    guidance_next_queue: Option<&Arc<std::sync::Mutex<Vec<String>>>>,
+    rpc_guidance_rx: Option<&mut tokio::sync::mpsc::Receiver<GuidanceMessage>>,
+) -> Vec<String> {
+    let mut guidance_messages: Vec<String> = Vec::new();
+
+    if let Some(queue) = guidance_next_queue {
+        let messages: Vec<String> = {
+            let mut q = queue.lock().unwrap();
+            q.drain(..).collect()
+        };
+        guidance_messages.extend(messages);
+    }
+
+    if let Some(rx) = rpc_guidance_rx {
+        while let Ok(msg) = rx.try_recv() {
+            if msg.target == ralph_proto::GuidanceTarget::Current {
+                debug!("Received RPC steer(current); applying at next prompt boundary");
+            }
+            guidance_messages.push(msg.message);
+        }
+    }
+
+    guidance_messages
+}
+
+fn should_inject_default_publishes(
+    agent_wrote_events: bool,
+    wave_events: &[ralph_core::Event],
+    urgent_steer_pending: bool,
+    urgent_steer_blocked_emit: bool,
+) -> bool {
+    !agent_wrote_events
+        && wave_events.is_empty()
+        && !urgent_steer_pending
+        && !urgent_steer_blocked_emit
 }
 
 fn prepare_tui_iteration(
@@ -9809,5 +9811,53 @@ hats:
             r#"[Tool] Bash: ralph emit "hypothesis.test" "payload""#
         ));
         assert!(!output_mentions_ralph_emit("[Tool] Bash: cargo test"));
+    }
+
+    #[test]
+    fn test_drain_pending_guidance_reaches_next_prompt_boundary() {
+        let mut event_loop = EventLoop::new(RalphConfig::default());
+        event_loop
+            .bus()
+            .publish(Event::new("task.start", "Do work"));
+
+        let queue = Arc::new(std::sync::Mutex::new(vec!["focus on tests".to_string()]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<GuidanceMessage>(4);
+        tx.blocking_send(GuidanceMessage {
+            message: "steer this fix carefully".to_string(),
+            target: ralph_proto::GuidanceTarget::Current,
+        })
+        .expect("queue rpc guidance");
+
+        let guidance = drain_pending_guidance_messages(Some(&queue), Some(&mut rx));
+        event_loop.inject_human_guidance(guidance);
+
+        let prompt = event_loop
+            .build_prompt(&HatId::new("ralph"))
+            .expect("prompt should build");
+
+        assert!(prompt.contains("## ROBOT GUIDANCE"));
+        assert!(prompt.contains("focus on tests"));
+        assert!(prompt.contains("steer this fix carefully"));
+    }
+
+    #[test]
+    fn test_urgent_steer_blocks_default_publishes_injection() {
+        assert!(!should_inject_default_publishes(true, &[], false, false));
+        assert!(!should_inject_default_publishes(
+            false,
+            &[ralph_core::Event {
+                topic: "review.file".to_string(),
+                payload: Some("src/main.rs".to_string()),
+                ts: "2026-03-24T00:00:00Z".to_string(),
+                wave_id: None,
+                wave_index: None,
+                wave_total: None,
+            }],
+            false,
+            false
+        ));
+        assert!(!should_inject_default_publishes(false, &[], true, false));
+        assert!(!should_inject_default_publishes(false, &[], false, true));
+        assert!(should_inject_default_publishes(false, &[], false, false));
     }
 }

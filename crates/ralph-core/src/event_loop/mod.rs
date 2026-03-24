@@ -779,6 +779,22 @@ impl EventLoop {
         self.bus.has_human_pending()
     }
 
+    /// Injects `human.guidance` events directly into the in-memory bus.
+    ///
+    /// This is used for local TUI/RPC guidance so the next prompt boundary
+    /// sees the message immediately without waiting for a JSONL reread.
+    pub fn inject_human_guidance<I, S>(&mut self, messages: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for message in messages {
+            let event = Event::new("human.guidance", message.into());
+            self.state.record_event(&event);
+            self.bus.publish(event);
+        }
+    }
+
     /// Returns whether unread JSONL events include any semantic `plan.*` topics.
     ///
     /// This allows callers to dispatch `pre.plan.created` hooks before

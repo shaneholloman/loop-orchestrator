@@ -43,7 +43,8 @@ use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 use ralph_adapters::detect_backend;
 use ralph_core::{
     CheckStatus, EventHistory, LockError, LoopContext, LoopEntry, LoopLock, LoopRegistry,
-    PreflightReport, PreflightRunner, RalphConfig, TerminationReason, truncate_with_ellipsis,
+    PreflightReport, PreflightRunner, RalphConfig, TerminationReason, UrgentSteerStore,
+    truncate_with_ellipsis,
     worktree::{WorktreeConfig, create_worktree, ensure_gitignore, remove_worktree},
 };
 use std::fs;
@@ -204,6 +205,10 @@ pub(crate) fn resolve_path_from_workspace(
     root: Option<&PathBuf>,
 ) -> PathBuf {
     resolve_workspace_root(root).join(path)
+}
+
+fn urgent_steer_path_from_workspace(root: Option<&PathBuf>) -> PathBuf {
+    resolve_workspace_root(root).join(".ralph/urgent-steer.json")
 }
 
 pub(crate) fn discover_workspace_root(start: &Path) -> Option<PathBuf> {
@@ -2420,6 +2425,29 @@ fn emit_command_with_root(
     let workspace_root = resolve_workspace_root(root);
     let current_events_marker = workspace_root.join(".ralph/current-events");
 
+    if std::env::var("RALPH_WAVE_ID").is_err() {
+        let urgent_steer_store = UrgentSteerStore::new(urgent_steer_path_from_workspace(root));
+        if let Some(record) = urgent_steer_store
+            .take()
+            .context("Failed to read urgent-steer marker")?
+        {
+            let guidance = record
+                .messages
+                .iter()
+                .enumerate()
+                .map(|(idx, message)| format!("{}. {}", idx + 1, message))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            anyhow::bail!(
+                "Urgent steer is pending. Do not hand off yet.\n\n\
+                 Human feedback:\n{guidance}\n\n\
+                 You have now seen the steer. Address it in this turn, then rerun `ralph emit` \
+                 once you are ready to hand off."
+            );
+        }
+    }
+
     // Generate timestamp if not provided
     let ts = args.ts.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
@@ -3059,6 +3087,41 @@ mod tests {
             .expect("read events");
         assert!(events.contains("\"topic\":\"debug.step\""));
         assert!(events.contains("task_id=demo"));
+    }
+
+    #[test]
+    fn test_emit_command_blocks_once_when_urgent_steer_pending() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(workspace.join(".ralph")).expect("ralph dir");
+        UrgentSteerStore::new(urgent_steer_path_from_workspace(Some(&workspace)))
+            .append_message("stop and fix the failing tests")
+            .expect("write urgent steer");
+
+        let err = emit_command_with_root(
+            ColorMode::Never,
+            EmitArgs {
+                topic: "debug.step".to_string(),
+                payload: "task_id=demo".to_string(),
+                json: false,
+                ts: Some("2026-03-09T00:00:00Z".to_string()),
+                file: PathBuf::from(".ralph/events.jsonl"),
+            },
+            Some(&workspace),
+        )
+        .expect_err("urgent steer should block first emit");
+
+        let message = format!("{err:#}");
+        assert!(message.contains("Urgent steer is pending"));
+        assert!(message.contains("stop and fix the failing tests"));
+
+        assert!(
+            UrgentSteerStore::new(urgent_steer_path_from_workspace(Some(&workspace)))
+                .load()
+                .expect("load marker")
+                .is_none(),
+            "first blocked emit should clear urgent steer marker"
+        );
     }
 
     #[test]

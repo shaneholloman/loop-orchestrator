@@ -96,9 +96,9 @@ impl SearchState {
 /// Whether guidance is being entered for the next or current iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuidanceMode {
-    /// Guidance for the next iteration (queued, written before build_prompt)
+    /// Guidance for the next prompt boundary.
     Next,
-    /// Guidance for the current iteration (written immediately to events.jsonl)
+    /// Urgent steer for the active iteration.
     Now,
 }
 
@@ -107,7 +107,7 @@ pub enum GuidanceMode {
 pub enum GuidanceResult {
     /// Next-iteration guidance was queued successfully.
     Queued,
-    /// Current-iteration guidance was written to events successfully.
+    /// Urgent steer was persisted successfully.
     Sent,
     /// Guidance could not be queued/written.
     Failed,
@@ -269,8 +269,10 @@ pub struct TuiState {
     pub guidance_input: String,
     /// Queue of guidance messages for the next iteration (drained by loop_runner).
     pub guidance_next_queue: Arc<Mutex<Vec<String>>>,
-    /// Path to events.jsonl for writing "now" guidance directly.
+    /// Path to events.jsonl for writing urgent guidance for the next prompt.
     pub events_path: Option<std::path::PathBuf>,
+    /// Path to the urgent-steer marker file used to gate `ralph emit`.
+    pub urgent_steer_path: Option<std::path::PathBuf>,
     /// Brief flash message after attempting to send guidance.
     /// (mode, result, when)
     pub guidance_flash: Option<(GuidanceMode, GuidanceResult, Instant)>,
@@ -339,6 +341,7 @@ impl TuiState {
             guidance_input: String::new(),
             guidance_next_queue: Arc::new(Mutex::new(Vec::new())),
             events_path: None,
+            urgent_steer_path: None,
             guidance_flash: None,
             // Subprocess error state
             subprocess_error: None,
@@ -388,6 +391,7 @@ impl TuiState {
                 let saved_pending_backend = self.pending_backend.clone();
                 let saved_guidance_next_queue = Arc::clone(&self.guidance_next_queue);
                 let saved_events_path = self.events_path.clone();
+                let saved_urgent_steer_path = self.urgent_steer_path.clone();
                 *self = Self::new();
                 self.hat_map = saved_hat_map;
                 self.loop_started = saved_loop_started; // Keep original timer
@@ -399,6 +403,7 @@ impl TuiState {
                 self.pending_backend = saved_pending_backend;
                 self.guidance_next_queue = saved_guidance_next_queue;
                 self.events_path = saved_events_path;
+                self.urgent_steer_path = saved_urgent_steer_path;
                 if let Some((hat_id, hat_display)) = custom_hat {
                     self.pending_hat = Some((hat_id, hat_display));
                 } else {
@@ -812,7 +817,8 @@ impl TuiState {
     /// Sends the current guidance input.
     ///
     /// For `GuidanceMode::Next`, pushes to the shared queue (drained by loop_runner).
-    /// For `GuidanceMode::Now`, writes directly to events.jsonl.
+    /// For `GuidanceMode::Now`, writes an urgent-steer marker immediately and
+    /// records `human.guidance` for the next prompt boundary.
     ///
     /// Returns true if guidance was sent successfully.
     pub fn send_guidance(&mut self) -> bool {
@@ -837,7 +843,8 @@ impl TuiState {
                 }
             }
             GuidanceMode::Now => {
-                let ok = self.write_guidance_event(&input);
+                let ok =
+                    self.write_urgent_steer_marker(&input) && self.write_guidance_event(&input);
                 if ok {
                     (true, GuidanceResult::Sent)
                 } else {
@@ -881,6 +888,16 @@ impl TuiState {
         };
 
         file.write_all(line.as_bytes()).is_ok() && file.write_all(b"\n").is_ok()
+    }
+
+    fn write_urgent_steer_marker(&self, message: &str) -> bool {
+        let Some(ref path) = self.urgent_steer_path else {
+            return false;
+        };
+
+        ralph_core::UrgentSteerStore::new(path.clone())
+            .append_message(message.to_string())
+            .is_ok()
     }
 
     /// Returns true if guidance input is currently active.
@@ -2485,9 +2502,11 @@ mod tests {
         fn send_guidance_now_writes_to_events_file() {
             let dir = tempfile::tempdir().unwrap();
             let events_path = dir.path().join("events.jsonl");
+            let urgent_steer_path = dir.path().join("urgent-steer.json");
 
             let mut state = TuiState::new();
             state.events_path = Some(events_path.clone());
+            state.urgent_steer_path = Some(urgent_steer_path.clone());
             state.start_guidance(GuidanceMode::Now);
             state.guidance_input = "fix the bug now".to_string();
             assert!(state.send_guidance());
@@ -2497,6 +2516,12 @@ mod tests {
             assert_eq!(event["topic"], "human.guidance");
             assert_eq!(event["payload"], "fix the bug now");
             assert!(event["ts"].is_string());
+
+            let steer = ralph_core::UrgentSteerStore::new(urgent_steer_path)
+                .load()
+                .unwrap()
+                .expect("urgent steer");
+            assert_eq!(steer.messages, vec!["fix the bug now"]);
         }
 
         #[test]

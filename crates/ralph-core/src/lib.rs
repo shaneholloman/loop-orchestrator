@@ -50,6 +50,7 @@ pub mod task_definition;
 pub mod task_store;
 pub mod testing;
 mod text;
+mod urgent_steer;
 pub mod utils;
 pub mod wave_detection;
 pub mod wave_prompt;
@@ -127,6 +128,7 @@ pub use task_definition::{
 };
 pub use task_store::TaskStore;
 pub use text::{floor_char_boundary, truncate_with_ellipsis};
+pub use urgent_steer::{UrgentSteerRecord, UrgentSteerStore};
 pub use wave_detection::{DetectedWave, detect_wave_events};
 pub use wave_prompt::{WaveWorkerContext, build_wave_worker_prompt};
 pub use wave_tracker::{CompletedWave, WaveFailure, WaveProgress, WaveResult, WaveTracker};

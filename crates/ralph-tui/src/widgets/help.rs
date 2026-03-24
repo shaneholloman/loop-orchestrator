@@ -66,11 +66,11 @@ pub fn render(f: &mut Frame, area: Rect) {
         )),
         Line::from(vec![
             Span::styled("  :", Style::default().fg(Color::Cyan)),
-            Span::raw("      Send guidance (next iteration)"),
+            Span::raw("      Send guidance (next prompt)"),
         ]),
         Line::from(vec![
             Span::styled("  !", Style::default().fg(Color::Cyan)),
-            Span::raw("      Send guidance (now, current iteration)"),
+            Span::raw("      Urgent steer (blocks handoff until seen)"),
         ]),
         Line::from(""),
         Line::from(Span::styled(
