@@ -23,10 +23,11 @@ A hat-based orchestration framework that keeps AI agents in a loop until the tas
 npm install -g @ralph-orchestrator/ralph-cli
 ```
 
-### Via Homebrew (macOS/Linux)
+### Via GitHub Releases installer
 
 ```bash
-brew install ralph-orchestrator
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/mikeyobrien/ralph-orchestrator/releases/latest/download/ralph-cli-installer.sh | sh
 ```
 
 ### Via Cargo
@@ -34,6 +35,8 @@ brew install ralph-orchestrator
 ```bash
 cargo install ralph-cli
 ```
+
+> Homebrew is not currently published from this repository's automated release flow. Prefer npm, Cargo, or the GitHub Releases installer.
 
 ## Quick Start
 

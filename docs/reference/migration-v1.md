@@ -41,8 +41,9 @@ which ralph  # Should return nothing
 # Via npm (recommended)
 npm install -g @ralph-orchestrator/ralph-cli
 
-# Via Homebrew
-brew install ralph-orchestrator
+# Via GitHub Releases installer
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/mikeyobrien/ralph-orchestrator/releases/latest/download/ralph-cli-installer.sh | sh
 
 # Via Cargo
 cargo install ralph-cli

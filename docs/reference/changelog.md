@@ -368,40 +368,65 @@ echo "Migration complete!"
 
 - [ ] All tests passing
 - [ ] Documentation updated
-- [ ] Changelog updated
-- [ ] Version bumped in setup.py
-- [ ] README examples tested
+- [ ] `CHANGELOG.md` updated
+- [ ] Workspace version bumped in `Cargo.toml`
+- [ ] npm package version bumped in `package.json`
+- [ ] README/install examples tested
+- [ ] Release workflow secrets and npm trusted publishing still configured
 
 ### 2. Release Steps
 
+Ralph uses the tag-driven GitHub Actions workflow in `.github/workflows/release.yml`.
+The release is created automatically by `cargo-dist`, then crates.io and npm publish jobs run.
+
 ```bash
-# 1. Update version
-vim setup.py  # Update version number
+# 1. Update release metadata
+$EDITOR Cargo.toml
+$EDITOR package.json
+$EDITOR CHANGELOG.md
 
-# 2. Commit changes
-git add -A
-git commit -m "Release version X.Y.Z"
+# 2. Validate locally
+cargo test
+cargo package -p ralph-cli --allow-dirty --list > /dev/null
+npm test
 
-# 3. Tag release
-git tag -a vX.Y.Z -m "Version X.Y.Z"
+# 3. Commit the release prep
+git add Cargo.toml Cargo.lock package.json CHANGELOG.md README.md docs/
+git commit -m "release: prepare vX.Y.Z"
 
-# 4. Push to GitHub
-git push origin main --tags
+# 4. Tag the release
+git tag -a vX.Y.Z -m "vX.Y.Z"
 
-# 5. Create GitHub release
-gh release create vX.Y.Z --title "Version X.Y.Z" --notes-file RELEASE_NOTES.md
+# 5. Push the branch and tag
+git push origin main
+git push origin vX.Y.Z
 
-# 6. Publish to PyPI (if applicable)
-python setup.py sdist bdist_wheel
-twine upload dist/*
+# 6. Monitor the release workflow
+gh run watch --workflow Release
+
+# 7. Verify published outputs
+gh release view vX.Y.Z
+cargo install ralph-cli --version X.Y.Z
+npm view @ralph-orchestrator/ralph-cli version
 ```
 
-### 3. Post-release
+### 3. What the automated workflow publishes
 
-- [ ] Announce on social media
-- [ ] Update documentation site
-- [ ] Close related issues
-- [ ] Plan next release
+On a successful tag push, the release workflow will:
+
+- build GitHub Release archives/installers with `cargo-dist`
+- create the GitHub Release automatically
+- publish workspace crates to crates.io in dependency order
+- publish the npm package via trusted publishing
+
+### 4. Post-release
+
+- [ ] Smoke-test npm install
+- [ ] Smoke-test Cargo install
+- [ ] Smoke-test the GitHub Releases shell installer
+- [ ] Announce the release
+- [ ] Update any external package taps or mirrors
+- [ ] Plan the next release
 
 ## Contributors
 

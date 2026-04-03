@@ -7,7 +7,6 @@ Comprehensive installation instructions for Ralph Orchestrator.
 - **OS**: macOS, Linux, or Windows
 - **Node.js**: 18+ (required for npm installs)
 - **Rust**: 1.70+ (required for cargo installs)
-- **Homebrew**: required for the Homebrew method
 
 ## Installation Methods
 
@@ -17,10 +16,11 @@ Comprehensive installation instructions for Ralph Orchestrator.
 npm install -g @ralph-orchestrator/ralph-cli
 ```
 
-### Method 2: Homebrew (macOS/Linux)
+### Method 2: GitHub Releases installer
 
 ```bash
-brew install ralph-orchestrator
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/mikeyobrien/ralph-orchestrator/releases/latest/download/ralph-cli-installer.sh | sh
 ```
 
 ### Method 3: Cargo
@@ -31,16 +31,18 @@ cargo install ralph-cli
 
 ### Method 4: Prebuilt Binary (cargo-dist)
 
-Download the latest release artifact for your OS/arch from GitHub Releases (built with cargo-dist), then place it on your PATH.
+Download the latest `ralph-cli-<target>.tar.xz` artifact from GitHub Releases, extract it, then place `ralph` on your PATH.
 
 ```bash
 # Example (replace with the correct archive for your platform)
 mkdir -p ~/bin
-curl -L -o ralph.tar.gz "<release-archive-url>"
-tar -xzf ralph.tar.gz
+curl -L -o ralph.tar.xz "<release-archive-url>"
+tar -xJf ralph.tar.xz
 mv ralph ~/bin/
 export PATH="$HOME/bin:$PATH"
 ```
+
+> Homebrew is not currently published from this repository's automated release flow.
 
 ## Verify Installation
 

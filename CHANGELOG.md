@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-04-03
+
+### Added
+
+- Agent waves for intra-loop parallel hat execution.
+- Current branch display in the TUI header.
+- Richer Copilot JSON stream event handling.
+
+### Changed
+
+- Improved rich TUI tool output and the end-to-end harness.
+- Shifted coverage and Rust gate validation earlier in CI, with aligned local/GitHub checks.
+- Refreshed documentation links and coverage publishing plumbing.
+
+### Fixed
+
+- TUI mouse toggle behavior.
+- Scratchpad path resolution for loop state.
+- Large prompt handoff for arg-based backends by routing through temp files.
+- CLI executor streaming and inactivity-timeout handling.
+- Self-loop event publishing guidance and backend contract validation coverage.
+
+## [2.8.1] - 2026-03-16
+
+### Changed
+
+- Version bump for 2.8.1 release.
+
 ## [2.8.0] - 2026-03-10
 
 ### Added

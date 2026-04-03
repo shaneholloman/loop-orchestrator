@@ -67,10 +67,11 @@ npm install -g @ralph-orchestrator/ralph-cli
 npx @ralph-orchestrator/ralph-cli --version
 ```
 
-### Via Homebrew (macOS)
+### Via GitHub Releases installer
 
 ```bash
-brew install ralph-orchestrator
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/mikeyobrien/ralph-orchestrator/releases/latest/download/ralph-cli-installer.sh | sh
 ```
 
 ### Via Cargo

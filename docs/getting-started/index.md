@@ -30,10 +30,11 @@ Before you begin, ensure you have:
     npm install -g @ralph-orchestrator/ralph-cli
     ```
 
-=== "Homebrew (macOS)"
+=== "GitHub Releases installer"
 
     ```bash
-    brew install ralph-orchestrator
+    curl --proto '=https' --tlsv1.2 -LsSf \
+      https://github.com/mikeyobrien/ralph-orchestrator/releases/latest/download/ralph-cli-installer.sh | sh
     ```
 
 === "Cargo"

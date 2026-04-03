@@ -94,7 +94,7 @@ Ralph iterates until it outputs `LOOP_COMPLETE` or hits the iteration limit.
 
 -   :material-download: **[Installation](getting-started/installation.md)**
 
-    Install Ralph via npm, Homebrew, or Cargo
+    Install Ralph via npm, the GitHub Releases installer, or Cargo
 
 -   :material-rocket-launch: **[Quick Start](getting-started/quick-start.md)**
 
